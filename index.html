@@ -187,7 +187,10 @@
                     </div>
                     <div class="relative">
                         <i class="fa-solid fa-magnifying-glass absolute left-3 top-3 text-xs text-slate-400"></i>
-                        <input type="text" id="searchQuery" placeholder="e.g. 崇拜 (comma-separated for multiple)..." class="w-full pl-9 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <input type="text" id="searchQuery" placeholder="e.g. 崇拜 (comma-separated for multiple)..." class="w-full pl-9 pr-8 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <button type="button" id="clearSearchBtn" title="Clear filter" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 transition">
+                            <i class="fa-solid fa-xmark text-xs"></i>
+                        </button>
                     </div>
                 </div>
 
@@ -377,8 +380,10 @@
         /**
          * Global Application State
          */
+        const DEFAULT_CLIENT_ID = '312917315664-0i0bva3tjvs5cj8cdmf5qj70ipfu64dg.apps.googleusercontent.com';
+
         const APP_STATE = {
-            clientId: localStorage.getItem('gcal_client_id') || '',
+            clientId: localStorage.getItem('gcal_client_id') || DEFAULT_CLIENT_ID,
             tokenClient: null,
             accessToken: null,
             isDemoMode: false,
@@ -427,6 +432,7 @@
             endDate: document.getElementById('endDate'),
             searchMode: document.getElementById('searchMode'),
             searchQuery: document.getElementById('searchQuery'),
+            clearSearchBtn: document.getElementById('clearSearchBtn'),
             incRecurring: document.getElementById('incRecurring'),
             incDeclined: document.getElementById('incDeclined'),
             fetchEventsBtn: document.getElementById('fetchEventsBtn'),
@@ -1130,9 +1136,9 @@
                     localStorage.setItem('gcal_client_id', val);
                     showToast('Client ID saved!', 'success');
                 } else {
-                    APP_STATE.clientId = '';
+                    APP_STATE.clientId = DEFAULT_CLIENT_ID;
                     localStorage.removeItem('gcal_client_id');
-                    showToast('Client ID cleared.', 'info');
+                    showToast('Reset to default Client ID.', 'info');
                 }
                 checkClientIdConfig();
                 closeModal(elements.settingsModal);
@@ -1152,6 +1158,22 @@
                 APP_STATE.selectedCalendarIds.clear();
                 renderCalendarList();
             });
+
+            // Search Input Clear Button
+            const toggleClearSearchBtn = () => {
+                if (elements.searchQuery.value.length > 0) {
+                    elements.clearSearchBtn.classList.remove('hidden');
+                } else {
+                    elements.clearSearchBtn.classList.add('hidden');
+                }
+            };
+            elements.searchQuery.addEventListener('input', toggleClearSearchBtn);
+            elements.clearSearchBtn.addEventListener('click', () => {
+                elements.searchQuery.value = '';
+                toggleClearSearchBtn();
+                elements.searchQuery.focus();
+            });
+            toggleClearSearchBtn();
 
             // Date Preset Buttons (Hong Kong Time)
             document.querySelectorAll('.preset-btn').forEach(btn => {
