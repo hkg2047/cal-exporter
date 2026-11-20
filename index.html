@@ -385,6 +385,7 @@
         const APP_STATE = {
             clientId: localStorage.getItem('gcal_client_id') || DEFAULT_CLIENT_ID,
             tokenClient: null,
+            tokenClientId: null,
             accessToken: null,
             isDemoMode: false,
             calendars: [],
@@ -472,6 +473,7 @@
             initDatePresets();
             setupEventListeners();
             checkClientIdConfig();
+            initGoogleTokenClient();
         });
 
         function initTheme() {
@@ -560,6 +562,64 @@
         /**
          * Google Authentication & API Integration
          */
+        const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+        const PROFILE_SCOPE = 'https://www.googleapis.com/auth/userinfo.profile';
+
+        function initGoogleTokenClient(retryCount = 0) {
+            if (!APP_STATE.clientId) return false;
+
+            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+                if (retryCount < 15) {
+                    setTimeout(() => initGoogleTokenClient(retryCount + 1), 300);
+                }
+                return false;
+            }
+
+            if (APP_STATE.tokenClient && APP_STATE.tokenClientId === APP_STATE.clientId) {
+                return true;
+            }
+
+            APP_STATE.tokenClientId = APP_STATE.clientId;
+            APP_STATE.tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: APP_STATE.clientId,
+                scope: `${CALENDAR_SCOPE} ${PROFILE_SCOPE}`,
+                callback: async (tokenResponse) => {
+                    if (tokenResponse && tokenResponse.error) {
+                        console.error('OAuth callback error:', tokenResponse);
+                        showToast(`Google sign-in error: ${tokenResponse.error_description || tokenResponse.error}`, 'error');
+                        return;
+                    }
+
+                    if (tokenResponse && tokenResponse.access_token) {
+                        const hasCalScope = google.accounts.oauth2.hasGrantedAllScopes(
+                            tokenResponse,
+                            CALENDAR_SCOPE
+                        );
+                        if (!hasCalScope) {
+                            showToast('Please check the box to allow Google Calendar read access when signing in.', 'error');
+                            return;
+                        }
+
+                        APP_STATE.accessToken = tokenResponse.access_token;
+                        APP_STATE.isDemoMode = false;
+                        elements.clientIdWarning.classList.add('hidden');
+                        await fetchUserProfile();
+                        const loaded = await fetchCalendarList();
+                        if (loaded) {
+                            showToast('Connected to Google Calendar!', 'success');
+                        }
+                    }
+                },
+                error_callback: (err) => {
+                    console.error('GIS popup error:', err);
+                    if (err && err.type !== 'popup_closed') {
+                        showToast('Google sign-in popup was blocked or failed. Please try again.', 'error');
+                    }
+                }
+            });
+            return true;
+        }
+
         function handleAuthClick() {
             if (!APP_STATE.clientId) {
                 showToast('Please configure your Google OAuth Client ID in Settings first.', 'error');
@@ -567,30 +627,97 @@
                 return;
             }
 
-            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+            if (!initGoogleTokenClient()) {
                 showToast('Google Identity Services library is still loading. Please try again in a moment.', 'error');
                 return;
             }
 
             try {
-                APP_STATE.tokenClient = google.accounts.oauth2.initTokenClient({
-                    client_id: APP_STATE.clientId,
-                    scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.profile',
-                    callback: async (tokenResponse) => {
-                        if (tokenResponse && tokenResponse.access_token) {
-                            APP_STATE.accessToken = tokenResponse.access_token;
-                            APP_STATE.isDemoMode = false;
-                            elements.clientIdWarning.classList.add('hidden');
-                            await fetchUserProfile();
-                            await fetchCalendarList();
-                            showToast('Connected to Google Calendar!', 'success');
-                        }
-                    }
-                });
-                APP_STATE.tokenClient.requestAccessToken({ prompt: 'consent' });
+                // Request access token without forcing redundant consent prompts when already granted
+                APP_STATE.tokenClient.requestAccessToken({ prompt: APP_STATE.accessToken ? '' : 'select_account' });
             } catch (err) {
                 console.error('OAuth Error:', err);
                 showToast('Authentication failed. Check your Client ID and Authorized Origins.', 'error');
+            }
+        }
+
+        function handleLogout() {
+            if (APP_STATE.accessToken && typeof google !== 'undefined' && google.accounts?.oauth2) {
+                google.accounts.oauth2.revoke(APP_STATE.accessToken, () => {});
+            }
+            APP_STATE.accessToken = null;
+            APP_STATE.isDemoMode = false;
+            APP_STATE.calendars = [];
+            APP_STATE.events = [];
+            APP_STATE.selectedCalendarIds.clear();
+
+            elements.loginBtn.classList.remove('hidden');
+            elements.userProfile.classList.add('hidden');
+            elements.calendarList.innerHTML = '<div class="text-xs text-slate-400 p-2 text-center">Connect your account or load Demo Mode to see available calendars.</div>';
+            renderTable();
+            showToast('Disconnected account.', 'info');
+        }
+
+        async function fetchUserProfile() {
+            try {
+                const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                    headers: { Authorization: `Bearer ${APP_STATE.accessToken}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    elements.userName.textContent = data.name || data.email || 'Google User';
+                    if (data.picture) elements.userAvatar.src = data.picture;
+                }
+            } catch (e) {
+                elements.userName.textContent = 'Google User';
+            }
+            elements.loginBtn.classList.add('hidden');
+            elements.userProfile.classList.remove('hidden');
+        }
+
+        async function fetchCalendarList(attempt = 1) {
+            elements.calendarList.innerHTML = '<div class="text-xs text-slate-400 p-2 text-center">Loading calendars...</div>';
+            try {
+                const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+                    headers: { Authorization: `Bearer ${APP_STATE.accessToken}` }
+                });
+                if (!res.ok) {
+                    // Retry once after a short delay in case the newly minted token is still propagating
+                    if (attempt < 2) {
+                        await new Promise(r => setTimeout(r, 600));
+                        return fetchCalendarList(attempt + 1);
+                    }
+                    let errDetail = `HTTP ${res.status}`;
+                    try {
+                        const errJson = await res.json();
+                        if (errJson?.error?.message) errDetail = errJson.error.message;
+                    } catch (_) {}
+                    throw new Error(errDetail);
+                }
+                const data = await res.json();
+                APP_STATE.calendars = data.items || [];
+                APP_STATE.selectedCalendarIds.clear();
+                APP_STATE.calendars.forEach(cal => {
+                    if (cal.primary || cal.selected) {
+                        APP_STATE.selectedCalendarIds.add(cal.id);
+                    }
+                });
+                renderCalendarList();
+                return true;
+            } catch (err) {
+                console.error('Calendar list fetch failed:', err);
+                elements.calendarList.innerHTML = `
+                    <div class="text-xs text-rose-500 p-2 text-center space-y-1.5">
+                        <div>Error loading calendars (${escapeHtml(err.message || 'Unknown error')}).</div>
+                        <button type="button" id="retryLoadCalsBtn" class="underline font-medium hover:text-rose-600">Retry</button>
+                    </div>
+                `;
+                const retryBtn = document.getElementById('retryLoadCalsBtn');
+                if (retryBtn) {
+                    retryBtn.addEventListener('click', () => fetchCalendarList(1));
+                }
+                showToast(`Could not fetch calendar list: ${err.message}`, 'error');
+                return false;
             }
         }
 
@@ -1140,6 +1267,9 @@
                     localStorage.removeItem('gcal_client_id');
                     showToast('Reset to default Client ID.', 'info');
                 }
+                APP_STATE.tokenClient = null;
+                APP_STATE.tokenClientId = null;
+                initGoogleTokenClient();
                 checkClientIdConfig();
                 closeModal(elements.settingsModal);
             });
