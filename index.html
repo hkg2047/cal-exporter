@@ -721,63 +721,6 @@
             }
         }
 
-        function handleLogout() {
-            if (APP_STATE.accessToken && typeof google !== 'undefined' && google.accounts?.oauth2) {
-                google.accounts.oauth2.revoke(APP_STATE.accessToken, () => {});
-            }
-            APP_STATE.accessToken = null;
-            APP_STATE.isDemoMode = false;
-            APP_STATE.calendars = [];
-            APP_STATE.events = [];
-            APP_STATE.selectedCalendarIds.clear();
-
-            elements.loginBtn.classList.remove('hidden');
-            elements.userProfile.classList.add('hidden');
-            elements.calendarList.innerHTML = '<div class="text-xs text-slate-400 p-2 text-center">Connect your account or load Demo Mode to see available calendars.</div>';
-            renderTable();
-            showToast('Disconnected account.', 'info');
-        }
-
-        async function fetchUserProfile() {
-            try {
-                const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                    headers: { Authorization: `Bearer ${APP_STATE.accessToken}` }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    elements.userName.textContent = data.name || data.email || 'Google User';
-                    if (data.picture) elements.userAvatar.src = data.picture;
-                }
-            } catch (e) {
-                elements.userName.textContent = 'Google User';
-            }
-            elements.loginBtn.classList.add('hidden');
-            elements.userProfile.classList.remove('hidden');
-        }
-
-        async function fetchCalendarList() {
-            elements.calendarList.innerHTML = '<div class="text-xs text-slate-400 p-2 text-center">Loading calendars...</div>';
-            try {
-                const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
-                    headers: { Authorization: `Bearer ${APP_STATE.accessToken}` }
-                });
-                if (!res.ok) throw new Error('Failed to fetch calendar list');
-                const data = await res.json();
-                APP_STATE.calendars = data.items || [];
-                APP_STATE.selectedCalendarIds.clear();
-                APP_STATE.calendars.forEach(cal => {
-                    if (cal.primary || cal.selected) {
-                        APP_STATE.selectedCalendarIds.add(cal.id);
-                    }
-                });
-                renderCalendarList();
-            } catch (err) {
-                console.error(err);
-                elements.calendarList.innerHTML = '<div class="text-xs text-rose-500 p-2 text-center">Error loading calendars.</div>';
-                showToast('Could not fetch calendar list.', 'error');
-            }
-        }
-
         /**
          * Demo Mode Data Loader
          */
